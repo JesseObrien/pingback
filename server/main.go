@@ -4,87 +4,53 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"net"
+	"github.com/codegangsta/negroni"
+	"github.com/unrolled/render"
 	"net/http"
+	"os"
 )
 
+var configFileName string
 var port string
-var DebugMode bool
+var networkNodes []NetworkNode
 
 func init() {
-	flag.StringVar(&port, "port", ":7733", "The port your server can run on. Default 7733.")
-	flag.BoolVar(&DebugMode, "debugMode", false, "Turn debug on or off.")
+	flag.StringVar(&configFileName, "config", ".pingback.conf", "--config=.pingback.conf")
+	flag.StringVar(&port, "port", "3001", "--port=80")
+	flag.Parse()
 }
 
-func DebugPrint(a ...interface{}) {
-	if !DebugMode {
-		fmt.Println(a)
-	}
-}
-
-type PingRequest struct {
-	Host string
-}
-
-type PingResponse struct {
-	Host   string
-	Status string
-}
-
-func ResolveHost(host string) PingResponse {
-	DebugPrint("Resolving host:" + host)
-	resp := PingResponse{}
-	getResp, err := http.Head(host)
-
-	defer getResp.Body.Close()
+func loadNetworkNodes() error {
+	fmt.Println("Loading network nodes from: " + configFileName)
+	file, err := os.Open(configFileName)
 
 	if err != nil {
-		resp.Status = "failed"
-	} else {
-		resp.Status = getResp.Status
+		return err
 	}
 
-	return resp
+	decoder := json.NewDecoder(file)
+
+	return decoder.Decode(&networkNodes)
 }
 
-func handlePingRequest(conn net.Conn) {
-	// Send some shit
-	defer conn.Close()
+func handleSplash(writer http.ResponseWriter, req *http.Request) {
+	r := render.New(render.Options{})
 
-	var r PingRequest
-	decoder := json.NewDecoder(conn)
-
-	if err := decoder.Decode(&r); err != nil {
-		panic(err)
-	}
-
-	DebugPrint("Request to resolve host received.")
-
-	resp := ResolveHost(r.Host)
-
-	DebugPrint("Host resolved.")
-
-	encoder := json.NewEncoder(conn)
-	encoder.Encode(resp)
-	DebugPrint("Response sent.")
+	r.HTML(writer, http.StatusOK, "splash", nil)
 }
 
 func main() {
 
-	server, err := net.Listen("tcp", port)
-	if err != nil {
+	if err := loadNetworkNodes(); err != nil {
 		panic(err)
 	}
 
-	DebugPrint("Starting server on port: " + port)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", handleSplash)
+	mux.HandleFunc("/ping", handlePingRequest)
 
-	for {
-		conn, err := server.Accept()
-
-		if err != nil {
-			panic(err)
-		}
-
-		go handlePingRequest(conn)
-	}
+	n := negroni.Classic()
+	n.UseHandler(mux)
+	n.Run(":" + port)
+	fmt.Println("Listening on " + port)
 }
